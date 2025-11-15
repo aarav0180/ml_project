@@ -3,7 +3,7 @@ Sentence splitting and preprocessing for advanced model.
 """
 import re
 import nltk
-from typing import List, Tuple
+from typing import List
 import numpy as np
 
 # Download required NLTK data
@@ -64,7 +64,7 @@ def process_article(
     text: str,
     max_sentences: int = 20,
     min_tokens_per_sentence: int = 5
-) -> Tuple[List[str], int]:
+) -> tuple[List[str], int]:
     """
     Process article: split into sentences, filter, and truncate/pad.
     
@@ -99,7 +99,7 @@ def process_articles_batch(
     texts: List[str],
     max_sentences: int = 20,
     min_tokens_per_sentence: int = 5
-) -> Tuple[List[List[str]], List[int]]:
+) -> tuple[List[List[str]], List[int]]:
     """
     Process a batch of articles.
     

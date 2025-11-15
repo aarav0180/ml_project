@@ -2,7 +2,7 @@
 Data loading and preprocessing for advanced model with sentence-level processing.
 """
 import torch
-from typing import List, Tuple
+from typing import List
 from transformers import BertTokenizerFast
 
 from .data_loader import load_data, prepare_data
@@ -41,7 +41,7 @@ class AdvancedDataProcessor:
     def process_texts(
         self,
         texts: List[str]
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, List[int]]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, List[int]]:
         """
         Process texts into sentence-level and article-level tokens.
         
@@ -109,7 +109,7 @@ class AdvancedDataProcessor:
         self,
         texts: List[str],
         labels: List[int]
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Prepare complete dataset.
         

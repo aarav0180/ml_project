@@ -5,7 +5,6 @@ Combines BERT article encoding with inconsistency score C(A).
 import torch
 import torch.nn as nn
 from transformers import AutoModel
-from typing import Tuple
 
 from .constraint_generator import ConstraintGenerator
 from .world_optimizer import WorldOptimizer
@@ -147,7 +146,7 @@ class AdvancedFakeNewsModel(nn.Module):
         article_input_ids: torch.Tensor,
         article_attention_mask: torch.Tensor,
         return_inconsistency: bool = False
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Forward pass.
         
@@ -159,7 +158,7 @@ class AdvancedFakeNewsModel(nn.Module):
             return_inconsistency: If True, also return inconsistency scores
         
         Returns:
-            Tuple of (logits, inconsistency_scores):
+            tuple of (logits, inconsistency_scores):
                 - logits: (batch_size, 2)
                 - inconsistency_scores: (batch_size,) if return_inconsistency else None
         """

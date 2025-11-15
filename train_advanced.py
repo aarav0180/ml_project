@@ -2,9 +2,11 @@
 Training script for Advanced Fake News Detection Model with Constraint-based Consistency.
 """
 import os
+import time
 import torch
 from torch.optim import AdamW
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
+from tqdm import tqdm
 
 from src.data import load_data, prepare_data
 from src.data.advanced_data_loader import AdvancedDataProcessor
@@ -40,8 +42,8 @@ def main():
     # Configuration
     config = {
         'data': {
-            'true_data_path': 'data/a1_True.csv',
-            'fake_data_path': 'data/a2_Fake.csv',
+            'true_data_path': 'data/True.csv',
+            'fake_data_path': 'data/Fake.csv',
             'text_column': 'text'  # Use full text for advanced model
         },
         'model': {
@@ -74,9 +76,15 @@ def main():
         }
     }
     
-    # Set device
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
+    # Set device - force CUDA if available
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+        print(f"Using device: {device}")
+        print(f"GPU: {torch.cuda.get_device_name(0)}")
+        print(f"CUDA Version: {torch.version.cuda}")
+    else:
+        device = torch.device("cpu")
+        print(f"Warning: CUDA not available. Using device: {device}")
     
     # Create directories
     os.makedirs('models', exist_ok=True)
@@ -190,32 +198,45 @@ def main():
     best_val_accuracy = 0.0
     
     for epoch in range(config['training']['epochs']):
+        epoch_start_time = time.time()
         print(f"\n{'='*70}")
         print(f"Epoch {epoch+1}/{config['training']['epochs']}")
         print(f"{'='*70}")
         
-        # Train
-        train_losses = trainer.train_epoch(train_dataloader)
+        # Train with progress bar
+        print("\nTraining...")
+        train_losses = trainer.train_epoch(train_dataloader, show_progress=True)
+        train_time = time.time() - epoch_start_time
+        
         print(f"\nTraining Losses:")
         print(f"  Classification: {train_losses['classification']:.4f}")
         print(f"  Separation: {train_losses['separation']:.4f}")
         print(f"  Smoothness: {train_losses['smoothness']:.4f}")
         print(f"  Total: {train_losses['total']:.4f}")
+        print(f"  Training Time: {train_time:.2f} seconds")
         
         # Evaluate
+        print("\nEvaluating...")
+        eval_start_time = time.time()
         val_metrics, val_report, _ = evaluator.evaluate(val_dataloader)
+        eval_time = time.time() - eval_start_time
+        
         print(f"\nValidation Metrics:")
         print(f"  Accuracy: {val_metrics['accuracy']:.4f}")
         print(f"  F1-Score: {val_metrics['f1_score']:.4f}")
         print(f"  ROC-AUC: {val_metrics['roc_auc']:.4f}")
         print(f"  Mean Inconsistency (Real): {val_metrics['mean_inconsistency_real']:.4f}")
         print(f"  Mean Inconsistency (Fake): {val_metrics['mean_inconsistency_fake']:.4f}")
+        print(f"  Evaluation Time: {eval_time:.2f} seconds")
         
         # Save best model
         if val_metrics['accuracy'] > best_val_accuracy:
             best_val_accuracy = val_metrics['accuracy']
             torch.save(model.state_dict(), config['paths']['model_save_path'])
             print(f"\n✓ Model saved with validation accuracy: {best_val_accuracy:.4f}")
+        
+        epoch_total_time = time.time() - epoch_start_time
+        print(f"\nEpoch {epoch+1} Total Time: {epoch_total_time:.2f} seconds ({epoch_total_time/60:.2f} minutes)")
     
     # Load best model and evaluate on test set
     print(f"\n{'='*70}")

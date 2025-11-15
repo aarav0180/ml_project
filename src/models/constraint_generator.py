@@ -33,7 +33,7 @@ class ConstraintGenerator(nn.Module):
         self.activation = nn.GELU()
         self.fc2 = nn.Linear(hidden_dim, latent_dim + 1)  # +1 for b_i
     
-    def forward(self, sentence_embeddings: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, sentence_embeddings: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Generate constraints from sentence embeddings.
         
@@ -41,7 +41,7 @@ class ConstraintGenerator(nn.Module):
             sentence_embeddings: Tensor of shape (batch_size, num_sentences, 768)
         
         Returns:
-            Tuple of (a_i, b_i):
+            tuple of (a_i, b_i):
                 - a_i: Tensor of shape (batch_size, num_sentences, latent_dim)
                 - b_i: Tensor of shape (batch_size, num_sentences)
         """

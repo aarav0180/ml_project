@@ -72,8 +72,8 @@ class WorldOptimizer:
         self,
         a_i: torch.Tensor,
         b_i: torch.Tensor,
-        device: str = 'cpu'
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        device = None
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Optimize world vector z for given constraints.
         
@@ -83,11 +83,17 @@ class WorldOptimizer:
             device: Device to run on
         
         Returns:
-            Tuple of (optimized_z, final_energy):
+            tuple of (optimized_z, final_energy):
                 - optimized_z: (batch_size, latent_dim)
                 - final_energy: (batch_size,) - inconsistency score C(A)
         """
         batch_size, num_sentences, latent_dim = a_i.shape
+        
+        # Get device from input tensor if not provided
+        if device is None:
+            device = a_i.device
+        elif isinstance(device, str):
+            device = torch.device(device)
         
         # Initialize z ~ N(0, 0.01)
         z = torch.randn(batch_size, latent_dim, device=device) * self.init_std

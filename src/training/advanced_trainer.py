@@ -4,6 +4,7 @@ Advanced trainer with three losses: classification, separation, and smoothness.
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from tqdm import tqdm
 
 
 class AdvancedTrainer:
@@ -46,7 +47,7 @@ class AdvancedTrainer:
         labels: torch.Tensor,
         inconsistency_scores: torch.Tensor,
         a_i: torch.Tensor
-    ) -> Tuple[torch.Tensor, dict]:
+    ) -> tuple[torch.Tensor, dict]:
         """
         Compute all three losses.
         
@@ -98,12 +99,13 @@ class AdvancedTrainer:
         
         return total_loss, loss_dict
     
-    def train_epoch(self, train_dataloader):
+    def train_epoch(self, train_dataloader, show_progress=False):
         """
         Train for one epoch.
         
         Args:
             train_dataloader: DataLoader for training
+            show_progress: If True, show progress bar
         
         Returns:
             Average loss dictionary
@@ -117,7 +119,13 @@ class AdvancedTrainer:
         }
         num_batches = 0
         
-        for batch in train_dataloader:
+        # Create progress bar if requested
+        if show_progress:
+            pbar = tqdm(train_dataloader, desc="Training", unit="batch")
+        else:
+            pbar = train_dataloader
+        
+        for batch in pbar:
             # Unpack batch
             (sentence_ids, sentence_mask, article_ids, article_mask, labels) = batch
             
@@ -168,6 +176,14 @@ class AdvancedTrainer:
             for key in total_losses:
                 total_losses[key] += loss_dict[key]
             num_batches += 1
+            
+            # Update progress bar
+            if show_progress:
+                pbar.set_postfix({
+                    'Loss': f"{loss_dict['total']:.4f}",
+                    'Cls': f"{loss_dict['classification']:.4f}",
+                    'Sep': f"{loss_dict['separation']:.4f}"
+                })
         
         # Average losses
         avg_losses = {key: val / num_batches for key, val in total_losses.items()}
