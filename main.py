@@ -1,7 +1,9 @@
 """
 Main script for training and evaluating BERT-based fake news detection model.
+Supports both basic BERT model and advanced constraint-based model.
 """
 import os
+import sys
 import torch
 import torch.nn as nn
 from torch.optim import AdamW
@@ -13,12 +15,18 @@ from src.utils import Tokenizer
 from src.training import Trainer, Evaluator
 
 
-def main():
+def main(model_type='basic'):
+    """
+    Main training function.
+    
+    Args:
+        model_type: 'basic' for simple BERT model, 'advanced' for constraint-based model
+    """
     # Configuration
     config = {
         'data': {
-            'true_data_path': 'data/True.csv',
-            'fake_data_path': 'data/Fake.csv',
+            'true_data_path': 'data/a1_True.csv',
+            'fake_data_path': 'data/a2_Fake.csv',
             'text_column': 'title'
         },
         'model': {
@@ -179,5 +187,20 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # Check command line argument for model type
+    if len(sys.argv) > 1:
+        model_type = sys.argv[1].lower()
+        if model_type not in ['basic', 'advanced']:
+            print("Usage: python main.py [basic|advanced]")
+            print("  basic: Simple BERT model (default)")
+            print("  advanced: Constraint-based model (use train_advanced.py instead)")
+            sys.exit(1)
+    else:
+        model_type = 'basic'
+    
+    if model_type == 'advanced':
+        print("For advanced model, please use: python train_advanced.py")
+        sys.exit(0)
+    
+    main(model_type=model_type)
 

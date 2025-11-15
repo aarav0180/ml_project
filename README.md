@@ -2,6 +2,10 @@
 
 A BERT-based binary classification model for detecting fake news articles.
 
+**Two Models Available:**
+1. **Basic BERT Model**: Simple and fast, uses headlines only
+2. **Advanced Constraint-Based Model**: Uses sentence-level analysis with inconsistency scoring (see [README_ADVANCED.md](README_ADVANCED.md))
+
 ## Project Structure
 
 ```
@@ -39,13 +43,25 @@ ml_test/
 
 ## Usage
 
-### Training the Model
+### Training the Models
 
-Run the main script to train the model:
+#### Basic BERT Model (Headlines)
+
+Run the main script to train the basic model:
 
 ```bash
 python main.py
 ```
+
+#### Advanced Constraint-Based Model (Full Articles)
+
+Run the advanced training script:
+
+```bash
+python train_advanced.py
+```
+
+**Note:** The advanced model uses full article text and requires more memory. See [README_ADVANCED.md](README_ADVANCED.md) for details.
 
 The script will:
 1. Load and preprocess the data
@@ -63,14 +79,20 @@ You can modify the configuration in `main.py`:
 - **Training**: Adjust `batch_size`, `learning_rate`, `epochs`, etc.
 - **Data**: Modify `max_length` for sequence length
 
-### Using the Model for Predictions
+### Using the Models for Predictions
 
 #### Interactive Mode (Recommended)
 
-Run the prediction script in interactive mode to check news headlines:
+Run the prediction script in interactive mode:
 
+**Basic Model (headlines):**
 ```bash
-python predict.py
+python predict.py --basic
+```
+
+**Advanced Model (full articles):**
+```bash
+python predict.py --advanced
 ```
 
 This will start an interactive session where you can:
@@ -87,10 +109,16 @@ Headline: Scientists discover new planet
 
 #### Command Line Mode
 
-You can also pass a news headline directly as a command line argument:
+You can also pass text directly as a command line argument:
 
+**Basic Model:**
 ```bash
-python predict.py "Your news headline here"
+python predict.py --basic "Your news headline here"
+```
+
+**Advanced Model:**
+```bash
+python predict.py --advanced "Your full news article text here"
 ```
 
 #### Programmatic Usage
@@ -134,10 +162,24 @@ The CSV files should have the following structure:
 - Classification report on test set
 - Example predictions on sample texts
 
+## Model Comparison
+
+| Feature | Basic Model | Advanced Model |
+|---------|------------|----------------|
+| Input | Headlines only | Full article text |
+| Processing | Single BERT encoding | Sentence-level + article-level |
+| Additional Features | None | Inconsistency scoring (C(A)) |
+| Training Loss | Classification only | Classification + Separation + Smoothness |
+| Batch Size | 32 | 4 (memory intensive) |
+| Speed | Fast | Slower (more computation) |
+| Use Case | Quick headline checking | Deep article analysis |
+
 ## Notes
 
-- The model uses only the `title` column for classification
+- **Basic Model**: Uses only the `title` column for classification
+- **Advanced Model**: Uses the `text` column (full article)
 - BERT parameters are frozen (not fine-tuned) for faster training
-- Model automatically uses GPU if available, otherwise falls back to CPU
-- Default sequence length is 15 tokens (can be adjusted in config)
+- Models automatically use GPU if available, otherwise fall back to CPU
+- Basic model default sequence length: 15 tokens
+- Advanced model: 64 tokens per sentence, 256 tokens per article
 
