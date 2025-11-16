@@ -1,15 +1,15 @@
 """
-Advanced trainer with three losses: classification, separation, and smoothness.
+Advanced trainer with classification and separation losses.
+Uses plausibility-based consistency scoring.
 """
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from tqdm import tqdm
 
 
 class AdvancedTrainer:
     """
-    Trainer for advanced model with multiple loss components.
+    Trainer for advanced model with plausibility-based consistency.
     """
     
     def __init__(
@@ -18,8 +18,7 @@ class AdvancedTrainer:
         optimizer,
         device='cpu',
         lambda1=0.1,
-        lambda2=0.1,
-        alpha=0.001
+        lambda2=0.1
     ):
         """
         Initialize advanced trainer.
@@ -30,14 +29,12 @@ class AdvancedTrainer:
             device: Device to train on
             lambda1: Weight for real news consistency loss
             lambda2: Weight for fake news consistency loss
-            alpha: Weight for smoothness loss
         """
         self.model = model
         self.optimizer = optimizer
         self.device = device
         self.lambda1 = lambda1
         self.lambda2 = lambda2
-        self.alpha = alpha
         
         self.criterion = nn.CrossEntropyLoss()
     
@@ -45,20 +42,18 @@ class AdvancedTrainer:
         self,
         logits: torch.Tensor,
         labels: torch.Tensor,
-        inconsistency_scores: torch.Tensor,
-        a_i: torch.Tensor
+        inconsistency_scores: torch.Tensor
     ) -> tuple[torch.Tensor, dict]:
         """
-        Compute all three losses.
+        Compute classification and separation losses.
         
         Args:
             logits: Model predictions (batch_size, 2)
             labels: True labels (batch_size,)
             inconsistency_scores: C(A) scores (batch_size,)
-            a_i: Constraint vectors (batch_size, num_sentences, latent_dim)
         
         Returns:
-            Tuple of (total_loss, loss_dict)
+            tuple of (total_loss, loss_dict)
         """
         # 1. Classification loss
         loss_cls = self.criterion(logits, labels)
@@ -82,18 +77,12 @@ class AdvancedTrainer:
         # L_sep = lambda1 * E[C(A)]_real - lambda2 * E[C(A)]_fake
         loss_sep = self.lambda1 * real_consistency - self.lambda2 * fake_consistency
         
-        # 3. Constraint smoothness loss
-        # L_smooth = alpha * sum_i ||a_i||^2
-        a_i_norm_squared = torch.norm(a_i, dim=2) ** 2  # (batch_size, num_sentences)
-        loss_smooth = self.alpha * a_i_norm_squared.sum()
-        
-        # Total loss
-        total_loss = loss_cls + loss_sep + loss_smooth
+        # Total loss (no smoothness loss)
+        total_loss = loss_cls + loss_sep
         
         loss_dict = {
             'classification': loss_cls.item(),
             'separation': loss_sep.item(),
-            'smoothness': loss_smooth.item(),
             'total': total_loss.item()
         }
         
@@ -114,7 +103,6 @@ class AdvancedTrainer:
         total_losses = {
             'classification': 0.0,
             'separation': 0.0,
-            'smoothness': 0.0,
             'total': 0.0
         }
         num_batches = 0
@@ -127,11 +115,9 @@ class AdvancedTrainer:
         
         for batch in pbar:
             # Unpack batch
-            (sentence_ids, sentence_mask, article_ids, article_mask, labels) = batch
+            (sentence_ids, sentence_mask, article_ids, article_mask, sentence_texts, labels) = batch
             
             # Move to device
-            sentence_ids = sentence_ids.to(self.device)
-            sentence_mask = sentence_mask.to(self.device)
             article_ids = article_ids.to(self.device)
             article_mask = article_mask.to(self.device)
             labels = labels.to(self.device)
@@ -139,32 +125,17 @@ class AdvancedTrainer:
             # Zero gradients
             self.optimizer.zero_grad()
             
-            # Forward pass - need to get a_i for smoothness loss
-            # We need to manually compute constraints
-            sentence_embeddings = self.model.encode_sentences(sentence_ids, sentence_mask)
-            a_i, b_i = self.model.constraint_generator(sentence_embeddings)
-            
-            # Optimize world vector
-            if self.model._world_optimizer is None:
-                from src.models.world_optimizer import WorldOptimizer
-                self.model._world_optimizer = WorldOptimizer(
-                    latent_dim=self.model.latent_dim,
-                    lr=self.model.world_opt_lr,
-                    steps=self.model.world_opt_steps
-                )
-            _, inconsistency_scores = self.model._world_optimizer.optimize(
-                a_i, b_i, device=self.device
+            # Forward pass with plausibility scoring
+            logits, inconsistency_scores = self.model(
+                sentence_texts=sentence_texts,
+                article_input_ids=article_ids,
+                article_attention_mask=article_mask,
+                return_inconsistency=True
             )
-            
-            # Encode article and classify
-            article_embedding = self.model.encode_article(article_ids, article_mask)
-            inconsistency_expanded = inconsistency_scores.unsqueeze(1)
-            combined_features = torch.cat([article_embedding, inconsistency_expanded], dim=1)
-            logits = self.model.classifier(combined_features)
             
             # Compute losses
             loss, loss_dict = self.compute_losses(
-                logits, labels, inconsistency_scores, a_i
+                logits, labels, inconsistency_scores
             )
             
             # Backward pass
@@ -188,4 +159,3 @@ class AdvancedTrainer:
         # Average losses
         avg_losses = {key: val / num_batches for key, val in total_losses.items()}
         return avg_losses
-

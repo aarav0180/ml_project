@@ -18,11 +18,12 @@ from src.training.advanced_evaluator import AdvancedEvaluator
 class AdvancedDataset(torch.utils.data.Dataset):
     """Dataset class for advanced model."""
     
-    def __init__(self, sentence_ids, sentence_mask, article_ids, article_mask, labels):
+    def __init__(self, sentence_ids, sentence_mask, article_ids, article_mask, sentence_texts, labels):
         self.sentence_ids = sentence_ids
         self.sentence_mask = sentence_mask
         self.article_ids = article_ids
         self.article_mask = article_mask
+        self.sentence_texts = sentence_texts  # Raw sentence texts for plausibility scoring
         self.labels = labels
     
     def __len__(self):
@@ -34,6 +35,7 @@ class AdvancedDataset(torch.utils.data.Dataset):
             self.sentence_mask[idx],
             self.article_ids[idx],
             self.article_mask[idx],
+            self.sentence_texts[idx],  # Include sentence texts
             self.labels[idx]
         )
 
@@ -49,27 +51,23 @@ def main():
         'model': {
             'bert_model_name': 'bert-base-uncased',
             'freeze_bert': True,
-            'latent_dim': 32,
-            'hidden_dim': 256,
-            'world_opt_lr': 0.05,
-            'world_opt_steps': 30
+            'plausibility_model_path': 'plausability_model_final'
         },
         'data_processing': {
-            'max_sentences': 20,
-            'max_tokens_per_sentence': 64,
+            'max_sentences': 12,  # Reduced from 20 for speed
+            'max_tokens_per_sentence': 48,  # Reduced from 64 for speed
             'max_tokens_per_article': 256,
             'min_tokens_per_sentence': 5
         },
         'training': {
-            'batch_size': 4,  # Smaller batch size due to memory requirements
+            'batch_size': 8,  # Increased batch size for better GPU utilization
             'learning_rate': 2e-5,
-            'epochs': 3,
+            'epochs': 1,  # Single epoch for faster training
             'test_size': 0.3,
             'val_size': 0.5,
             'random_state': 2018,
             'lambda1': 0.1,  # Real news consistency weight
-            'lambda2': 0.1,  # Fake news consistency weight
-            'alpha': 0.001   # Smoothness weight
+            'lambda2': 0.1   # Fake news consistency weight
         },
         'paths': {
             'model_save_path': 'models/advanced_model_weights.pt'
@@ -124,29 +122,29 @@ def main():
     
     # Process data
     print("Processing training data...")
-    train_sentence_ids, train_sentence_mask, train_article_ids, train_article_mask, train_labels_tensor = \
+    train_sentence_ids, train_sentence_mask, train_article_ids, train_article_mask, train_sentence_texts, train_labels_tensor = \
         processor.prepare_dataset(train_text.tolist(), train_labels.tolist())
     
     print("Processing validation data...")
-    val_sentence_ids, val_sentence_mask, val_article_ids, val_article_mask, val_labels_tensor = \
+    val_sentence_ids, val_sentence_mask, val_article_ids, val_article_mask, val_sentence_texts, val_labels_tensor = \
         processor.prepare_dataset(val_text.tolist(), val_labels.tolist())
     
     print("Processing test data...")
-    test_sentence_ids, test_sentence_mask, test_article_ids, test_article_mask, test_labels_tensor = \
+    test_sentence_ids, test_sentence_mask, test_article_ids, test_article_mask, test_sentence_texts, test_labels_tensor = \
         processor.prepare_dataset(test_text.tolist(), test_labels.tolist())
     
     # Create datasets
     train_dataset = AdvancedDataset(
         train_sentence_ids, train_sentence_mask,
-        train_article_ids, train_article_mask, train_labels_tensor
+        train_article_ids, train_article_mask, train_sentence_texts, train_labels_tensor
     )
     val_dataset = AdvancedDataset(
         val_sentence_ids, val_sentence_mask,
-        val_article_ids, val_article_mask, val_labels_tensor
+        val_article_ids, val_article_mask, val_sentence_texts, val_labels_tensor
     )
     test_dataset = AdvancedDataset(
         test_sentence_ids, test_sentence_mask,
-        test_article_ids, test_article_mask, test_labels_tensor
+        test_article_ids, test_article_mask, test_sentence_texts, test_labels_tensor
     )
     
     # Create data loaders
@@ -154,28 +152,31 @@ def main():
     train_dataloader = DataLoader(
         train_dataset,
         sampler=RandomSampler(train_dataset),
-        batch_size=config['training']['batch_size']
+        batch_size=config['training']['batch_size'],
+        num_workers=2,
+        pin_memory=True if torch.cuda.is_available() else False
     )
     val_dataloader = DataLoader(
         val_dataset,
         sampler=SequentialSampler(val_dataset),
-        batch_size=config['training']['batch_size']
+        batch_size=config['training']['batch_size'],
+        num_workers=2,
+        pin_memory=True if torch.cuda.is_available() else False
     )
     test_dataloader = DataLoader(
         test_dataset,
         sampler=SequentialSampler(test_dataset),
-        batch_size=config['training']['batch_size']
+        batch_size=config['training']['batch_size'],
+        num_workers=2,
+        pin_memory=True if torch.cuda.is_available() else False
     )
     
     # Create model
     print("\nCreating advanced model...")
     model = AdvancedFakeNewsModel(
         bert_model_name=config['model']['bert_model_name'],
-        latent_dim=config['model']['latent_dim'],
-        hidden_dim=config['model']['hidden_dim'],
         freeze_bert=config['model']['freeze_bert'],
-        world_opt_lr=config['model']['world_opt_lr'],
-        world_opt_steps=config['model']['world_opt_steps']
+        plausibility_model_path=config['model']['plausibility_model_path']
     )
     model.to(device)
     
@@ -188,8 +189,7 @@ def main():
         optimizer,
         device=device,
         lambda1=config['training']['lambda1'],
-        lambda2=config['training']['lambda2'],
-        alpha=config['training']['alpha']
+        lambda2=config['training']['lambda2']
     )
     evaluator = AdvancedEvaluator(model, device=device)
     
@@ -211,7 +211,6 @@ def main():
         print(f"\nTraining Losses:")
         print(f"  Classification: {train_losses['classification']:.4f}")
         print(f"  Separation: {train_losses['separation']:.4f}")
-        print(f"  Smoothness: {train_losses['smoothness']:.4f}")
         print(f"  Total: {train_losses['total']:.4f}")
         print(f"  Training Time: {train_time:.2f} seconds")
         
@@ -227,6 +226,9 @@ def main():
         print(f"  ROC-AUC: {val_metrics['roc_auc']:.4f}")
         print(f"  Mean Inconsistency (Real): {val_metrics['mean_inconsistency_real']:.4f}")
         print(f"  Mean Inconsistency (Fake): {val_metrics['mean_inconsistency_fake']:.4f}")
+        print(f"  Mean Plausibility (Real): {val_metrics['mean_plausibility_real']:.4f}")
+        print(f"  Mean Plausibility (Fake): {val_metrics['mean_plausibility_fake']:.4f}")
+        print(f"  Uncertain Ratio: {val_metrics['uncertain_ratio']:.2%}")
         print(f"  Evaluation Time: {eval_time:.2f} seconds")
         
         # Save best model
@@ -254,6 +256,10 @@ def main():
     print(f"  Mean Inconsistency (Fake): {test_metrics['mean_inconsistency_fake']:.4f}")
     print(f"  Std Inconsistency (Real): {test_metrics['std_inconsistency_real']:.4f}")
     print(f"  Std Inconsistency (Fake): {test_metrics['std_inconsistency_fake']:.4f}")
+    print(f"  Mean Plausibility (Real): {test_metrics['mean_plausibility_real']:.4f}")
+    print(f"  Mean Plausibility (Fake): {test_metrics['mean_plausibility_fake']:.4f}")
+    print(f"  Overall Mean Plausibility: {test_metrics['mean_plausibility']:.4f}")
+    print(f"  Uncertain Ratio: {test_metrics['uncertain_ratio']:.2%}")
     
     print(f"\nClassification Report:")
     print(test_report)

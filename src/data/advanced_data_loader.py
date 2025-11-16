@@ -41,7 +41,7 @@ class AdvancedDataProcessor:
     def process_texts(
         self,
         texts: List[str]
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, List[int]]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, List[List[str]], List[int]]:
         """
         Process texts into sentence-level and article-level tokens.
         
@@ -54,6 +54,7 @@ class AdvancedDataProcessor:
                 - sentence_attention_mask: (batch_size, max_sentences, max_tokens_per_sentence)
                 - article_input_ids: (batch_size, max_tokens_per_article)
                 - article_attention_mask: (batch_size, max_tokens_per_article)
+                - sentence_texts: List of lists of sentence strings (batch_size, num_sentences)
                 - sentence_counts: List of actual sentence counts per article
         """
         # Process articles into sentences
@@ -102,6 +103,7 @@ class AdvancedDataProcessor:
             sentence_attention_mask,
             article_input_ids,
             article_attention_mask,
+            sentence_lists,  # Return raw sentence texts
             sentence_counts
         )
     
@@ -109,7 +111,7 @@ class AdvancedDataProcessor:
         self,
         texts: List[str],
         labels: List[int]
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, List[List[str]], torch.Tensor]:
         """
         Prepare complete dataset.
         
@@ -118,10 +120,10 @@ class AdvancedDataProcessor:
             labels: List of labels
         
         Returns:
-            Tuple of all tensors needed for training
+            Tuple of all tensors and sentence texts needed for training
         """
-        sentence_ids, sentence_mask, article_ids, article_mask, _ = self.process_texts(texts)
+        sentence_ids, sentence_mask, article_ids, article_mask, sentence_texts, _ = self.process_texts(texts)
         labels_tensor = torch.tensor(labels, dtype=torch.long)
         
-        return sentence_ids, sentence_mask, article_ids, article_mask, labels_tensor
+        return sentence_ids, sentence_mask, article_ids, article_mask, sentence_texts, labels_tensor
 

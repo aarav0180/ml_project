@@ -2,15 +2,18 @@
 Standalone prediction script for fake news detection.
 Interactive script that takes user input and predicts if news is Fake or True.
 Supports both basic BERT model and advanced constraint-based model.
+Enhanced with multi-sentence consistency analysis.
 """
 import os
 import sys
 import torch
 import numpy as np
+from itertools import combinations
 from src.models.bert_model import create_model
 from src.models.advanced_model import AdvancedFakeNewsModel
 from src.utils import Tokenizer
 from src.data.advanced_data_loader import AdvancedDataProcessor
+from src.data.sentence_processor import split_into_sentences
 from src.training import Evaluator
 
 
@@ -58,15 +61,115 @@ class FakeNewsDetector:
             self.tokenizer = Tokenizer()
             self.evaluator = Evaluator(self.model, None, device=device)
         else:  # advanced
-            self.model = AdvancedFakeNewsModel()
+            self.model = AdvancedFakeNewsModel(
+                plausibility_model_path='plausability_model_final'
+            )
             self.model.to(device)
             self.model.load_state_dict(torch.load(model_path, map_location=device))
             self.model.eval()
             self.processor = AdvancedDataProcessor()
+            # Get plausibility model for direct access
+            self.plausibility_model = self.model.plausibility_model
         
         print("Model loaded successfully!\n")
     
-    def predict(self, text, return_confidence=False, return_inconsistency=False):
+    def analyze_sentence_combinations(self, sentences):
+        """
+        Analyze plausibility of individual sentences and their combinations.
+        
+        Args:
+            sentences: List of sentence strings
+        
+        Returns:
+            Dictionary with analysis results:
+                - individual_scores: List of plausibility scores for each sentence
+                - combination_scores: Dict mapping (i, j) pairs to combined plausibility
+                - inconsistency_drops: Dict mapping pairs to plausibility drop when combined
+                - overall_consistency: Overall consistency score
+        """
+        if len(sentences) < 2:
+            # Single sentence - just return its score
+            if sentences:
+                score = self.plausibility_model.score_claim(sentences[0])
+                return {
+                    'individual_scores': [score],
+                    'combination_scores': {},
+                    'inconsistency_drops': {},
+                    'overall_consistency': 1.0 - score,
+                    'mean_individual_plausibility': score
+                }
+            return {
+                'individual_scores': [],
+                'combination_scores': {},
+                'inconsistency_drops': {},
+                'overall_consistency': 0.0,
+                'mean_individual_plausibility': 0.0
+            }
+        
+        # Score each sentence individually
+        individual_scores = self.plausibility_model.score_batch(sentences)
+        
+        # Score all pairs of sentences when combined
+        combination_scores = {}
+        inconsistency_drops = {}
+        
+        # Check all pairs
+        for i, j in combinations(range(len(sentences)), 2):
+            sent_i = sentences[i]
+            sent_j = sentences[j]
+            
+            # Combine sentences (with a separator)
+            combined = f"{sent_i} {sent_j}"
+            
+            # Score the combination
+            combined_score = self.plausibility_model.score_claim(combined)
+            combination_scores[(i, j)] = combined_score
+            
+            # Calculate individual average
+            individual_avg = (individual_scores[i] + individual_scores[j]) / 2.0
+            
+            # If combined score is significantly lower than individual average, it's inconsistent
+            drop = individual_avg - combined_score
+            inconsistency_drops[(i, j)] = max(0.0, drop)  # Only positive drops
+        
+        # Check triplets if we have 3+ sentences (for more thorough analysis)
+        if len(sentences) >= 3:
+            for i, j, k in combinations(range(len(sentences)), 3):
+                sent_i = sentences[i]
+                sent_j = sentences[j]
+                sent_k = sentences[k]
+                
+                # Combine all three
+                combined = f"{sent_i} {sent_j} {sent_k}"
+                combined_score = self.plausibility_model.score_claim(combined)
+                combination_scores[(i, j, k)] = combined_score
+                
+                # Calculate individual average
+                individual_avg = (individual_scores[i] + individual_scores[j] + individual_scores[k]) / 3.0
+                drop = individual_avg - combined_score
+                inconsistency_drops[(i, j, k)] = max(0.0, drop)
+        
+        # Calculate overall consistency score
+        # Based on: mean violation of individual sentences + inconsistency from combinations
+        violations = [1.0 - score for score in individual_scores]
+        mean_violation = np.mean(violations) if violations else 0.0
+        
+        # Add inconsistency from combinations (weighted by drop magnitude)
+        combination_inconsistency = np.mean(list(inconsistency_drops.values())) if inconsistency_drops else 0.0
+        
+        # Overall consistency = mean violation + combination inconsistency
+        overall_consistency = mean_violation + 0.5 * combination_inconsistency  # Weight combination less
+        
+        return {
+            'individual_scores': individual_scores,
+            'combination_scores': combination_scores,
+            'inconsistency_drops': inconsistency_drops,
+            'overall_consistency': overall_consistency,
+            'mean_individual_plausibility': np.mean(individual_scores) if individual_scores else 0.0,
+            'max_inconsistency_drop': max(inconsistency_drops.values()) if inconsistency_drops else 0.0
+        }
+    
+    def predict(self, text, return_confidence=False, return_inconsistency=False, return_analysis=False):
         """
         Predict whether a news headline/article is fake or true.
         
@@ -74,14 +177,17 @@ class FakeNewsDetector:
             text: News headline or article text string
             return_confidence: If True, also return confidence score
             return_inconsistency: If True and using advanced model, return inconsistency score
+            return_analysis: If True and using advanced model, return detailed sentence analysis
         
         Returns:
-            Prediction ('Fake' or 'True') and optionally confidence/inconsistency scores
+            Prediction ('Fake' or 'True') and optionally confidence/inconsistency scores/analysis
         """
         if not text or not text.strip():
             result = "Invalid input" if not return_confidence else ("Invalid input", 0.0)
             if return_inconsistency and self.model_type == 'advanced':
                 result = ("Invalid input", 0.0, 0.0)
+            if return_analysis and self.model_type == 'advanced':
+                result = ("Invalid input", 0.0, 0.0, {})
             return result
         
         if self.model_type == 'basic':
@@ -105,19 +211,27 @@ class FakeNewsDetector:
             return prediction
         
         else:  # advanced model
-            # Advanced model prediction
-            sentence_ids, sentence_mask, article_ids, article_mask, _ = \
+            # Split text into sentences for analysis
+            sentences = split_into_sentences(text)
+            sentences = [s.strip() for s in sentences if s.strip()]  # Clean and filter empty
+            
+            # Analyze sentence combinations if requested
+            combination_analysis = None
+            if return_analysis:
+                combination_analysis = self.analyze_sentence_combinations(sentences)
+            
+            # Advanced model prediction (using full text)
+            sentence_ids, sentence_mask, article_ids, article_mask, sentence_texts, _ = \
                 self.processor.process_texts([text])
             
-            sentence_ids = sentence_ids.to(self.device)
-            sentence_mask = sentence_mask.to(self.device)
             article_ids = article_ids.to(self.device)
             article_mask = article_mask.to(self.device)
             
             with torch.no_grad():
                 logits, inconsistency_score = self.model(
-                    sentence_ids, sentence_mask,
-                    article_ids, article_mask,
+                    sentence_texts=sentence_texts,
+                    article_input_ids=article_ids,
+                    article_attention_mask=article_mask,
                     return_inconsistency=True
                 )
                 
@@ -130,8 +244,20 @@ class FakeNewsDetector:
             label_map = {0: "True", 1: "Fake"}
             prediction = label_map[prediction_idx]
             
-            if return_inconsistency:
-                return prediction, float(confidence), float(inconsistency_score)
+            # Combine model inconsistency with combination analysis if available
+            if combination_analysis:
+                # Use the higher of the two inconsistency scores
+                combined_inconsistency = max(
+                    inconsistency_score,
+                    combination_analysis['overall_consistency']
+                )
+            else:
+                combined_inconsistency = inconsistency_score
+            
+            if return_analysis and combination_analysis:
+                return prediction, float(confidence), float(combined_inconsistency), combination_analysis
+            elif return_inconsistency:
+                return prediction, float(confidence), float(combined_inconsistency)
             elif return_confidence:
                 return prediction, float(confidence)
             return prediction
@@ -215,14 +341,61 @@ def interactive_mode(model_type='basic'):
             # Make prediction
             try:
                 if model_type == 'advanced':
-                    prediction, confidence, inconsistency = detector.predict(
-                        text, return_confidence=True, return_inconsistency=True
-                    )
+                    # Check if multiple sentences
+                    sentences = split_into_sentences(text)
+                    sentences = [s.strip() for s in sentences if s.strip()]
                     
-                    if prediction == "Fake":
-                        result_str = f"❌ FAKE (Confidence: {confidence:.2%}, Inconsistency: {inconsistency:.4f})"
+                    if len(sentences) > 1:
+                        # Multi-sentence analysis
+                        prediction, confidence, inconsistency, analysis = detector.predict(
+                            text, return_confidence=True, return_inconsistency=True, return_analysis=True
+                        )
+                        
+                        if prediction == "Fake":
+                            result_str = f"❌ FAKE (Confidence: {confidence:.2%}, Inconsistency: {inconsistency:.4f})"
+                        else:
+                            result_str = f"✅ TRUE (Confidence: {confidence:.2%}, Inconsistency: {inconsistency:.4f})"
+                        
+                        print(f"\nResult: {result_str}")
+                        print(f"\n📊 Sentence Analysis ({len(sentences)} sentences):")
+                        print("-" * 70)
+                        
+                        # Show individual sentence scores
+                        print("\nIndividual Sentence Plausibility:")
+                        for i, (sent, score) in enumerate(zip(sentences, analysis['individual_scores']), 1):
+                            status = "✅" if score >= 0.5 else "⚠️"
+                            print(f"  {i}. [{status} {score:.3f}] {sent[:80]}{'...' if len(sent) > 80 else ''}")
+                        
+                        # Show combination inconsistencies
+                        if analysis['inconsistency_drops']:
+                            print(f"\n⚠️  Combination Inconsistencies Found:")
+                            for key, drop in sorted(analysis['inconsistency_drops'].items(), key=lambda x: x[1], reverse=True):
+                                if drop > 0.1:  # Only show significant drops
+                                    if len(key) == 2:
+                                        i, j = key
+                                        print(f"  Sentences {i+1} & {j+1}: Drop of {drop:.3f} when combined")
+                                    elif len(key) == 3:
+                                        i, j, k = key
+                                        print(f"  Sentences {i+1}, {j+1} & {k+1}: Drop of {drop:.3f} when combined")
+                        
+                        print(f"\nMean Individual Plausibility: {analysis['mean_individual_plausibility']:.3f}")
+                        if analysis['max_inconsistency_drop'] > 0:
+                            print(f"Max Inconsistency Drop: {analysis['max_inconsistency_drop']:.3f}")
+                        
+                        print(f"\nText: {text[:100]}{'...' if len(text) > 100 else ''}\n")
                     else:
-                        result_str = f"✅ TRUE (Confidence: {confidence:.2%}, Inconsistency: {inconsistency:.4f})"
+                        # Single sentence - standard output
+                        prediction, confidence, inconsistency = detector.predict(
+                            text, return_confidence=True, return_inconsistency=True
+                        )
+                        
+                        if prediction == "Fake":
+                            result_str = f"❌ FAKE (Confidence: {confidence:.2%}, Inconsistency: {inconsistency:.4f})"
+                        else:
+                            result_str = f"✅ TRUE (Confidence: {confidence:.2%}, Inconsistency: {inconsistency:.4f})"
+                        
+                        print(f"\nResult: {result_str}")
+                        print(f"Text: {text[:100]}{'...' if len(text) > 100 else ''}\n")
                 else:
                     prediction, confidence = detector.predict(text, return_confidence=True)
                     
@@ -230,9 +403,10 @@ def interactive_mode(model_type='basic'):
                         result_str = f"❌ FAKE (Confidence: {confidence:.2%})"
                     else:
                         result_str = f"✅ TRUE (Confidence: {confidence:.2%})"
+                    
+                    print(f"\nResult: {result_str}")
+                    print(f"Text: {text[:100]}{'...' if len(text) > 100 else ''}\n")
                 
-                print(f"\nResult: {result_str}")
-                print(f"Text: {text[:100]}{'...' if len(text) > 100 else ''}\n")
                 print("-" * 70 + "\n")
                 
             except Exception as e:
@@ -263,14 +437,58 @@ def single_prediction(text, model_type='basic'):
         detector = FakeNewsDetector(model_path=model_path, model_type=model_type)
         
         if model_type == 'advanced':
-            prediction, confidence, inconsistency = detector.predict(
-                text, return_confidence=True, return_inconsistency=True
-            )
+            # Check if multiple sentences
+            sentences = split_into_sentences(text)
+            sentences = [s.strip() for s in sentences if s.strip()]
             
-            if prediction == "Fake":
-                result_str = f"❌ FAKE (Confidence: {confidence:.2%}, Inconsistency: {inconsistency:.4f})"
+            if len(sentences) > 1:
+                # Multi-sentence analysis
+                prediction, confidence, inconsistency, analysis = detector.predict(
+                    text, return_confidence=True, return_inconsistency=True, return_analysis=True
+                )
+                
+                if prediction == "Fake":
+                    result_str = f"❌ FAKE (Confidence: {confidence:.2%}, Inconsistency: {inconsistency:.4f})"
+                else:
+                    result_str = f"✅ TRUE (Confidence: {confidence:.2%}, Inconsistency: {inconsistency:.4f})"
+                
+                print(f"\nResult: {result_str}")
+                print(f"\n📊 Sentence Analysis ({len(sentences)} sentences):")
+                print("-" * 70)
+                
+                # Show individual sentence scores
+                print("\nIndividual Sentence Plausibility:")
+                for i, (sent, score) in enumerate(zip(sentences, analysis['individual_scores']), 1):
+                    status = "✅" if score >= 0.5 else "⚠️"
+                    print(f"  {i}. [{status} {score:.3f}] {sent[:80]}{'...' if len(sent) > 80 else ''}")
+                
+                # Show combination inconsistencies
+                if analysis['inconsistency_drops']:
+                    print(f"\n⚠️  Combination Inconsistencies Found:")
+                    for key, drop in sorted(analysis['inconsistency_drops'].items(), key=lambda x: x[1], reverse=True):
+                        if drop > 0.1:  # Only show significant drops
+                            if len(key) == 2:
+                                i, j = key
+                                print(f"  Sentences {i+1} & {j+1}: Drop of {drop:.3f} when combined")
+                            elif len(key) == 3:
+                                i, j, k = key
+                                print(f"  Sentences {i+1}, {j+1} & {k+1}: Drop of {drop:.3f} when combined")
+                
+                print(f"\nMean Individual Plausibility: {analysis['mean_individual_plausibility']:.3f}")
+                if analysis['max_inconsistency_drop'] > 0:
+                    print(f"Max Inconsistency Drop: {analysis['max_inconsistency_drop']:.3f}")
             else:
-                result_str = f"✅ TRUE (Confidence: {confidence:.2%}, Inconsistency: {inconsistency:.4f})"
+                # Single sentence
+                prediction, confidence, inconsistency = detector.predict(
+                    text, return_confidence=True, return_inconsistency=True
+                )
+                
+                if prediction == "Fake":
+                    result_str = f"❌ FAKE (Confidence: {confidence:.2%}, Inconsistency: {inconsistency:.4f})"
+                else:
+                    result_str = f"✅ TRUE (Confidence: {confidence:.2%}, Inconsistency: {inconsistency:.4f})"
+                
+                print(f"\nResult: {result_str}")
         else:
             prediction, confidence = detector.predict(text, return_confidence=True)
             
@@ -278,8 +496,9 @@ def single_prediction(text, model_type='basic'):
                 result_str = f"❌ FAKE (Confidence: {confidence:.2%})"
             else:
                 result_str = f"✅ TRUE (Confidence: {confidence:.2%})"
+            
+            print(f"\nResult: {result_str}")
         
-        print(f"\nResult: {result_str}")
         print(f"Text: {text}\n")
         
     except FileNotFoundError as e:

@@ -60,3 +60,4 @@ Thumbs.db
 .cache/
 transformers_cache/
 
+"./plausability_model_final/" 
