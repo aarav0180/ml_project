@@ -33,16 +33,16 @@ ENV/
 *.swo
 *~
 
-# Model files
-models/
+# Model files (root level only)
+/models/
 *.pt
 *.pth
 *.bin
 *.safetensors
 advanced_model_weights.pt
 
-# Data files
-data/
+# Data files (root level only)
+/data/
 *.csv
 *.json
 *.parquet
@@ -65,4 +65,8 @@ plausability_model_final/
 # Config overrides (keep default)
 configs/*.yaml
 !configs/default_config.yaml
+
+# But include lwc subdirectories
+!/lwc/models/
+!/lwc/data/
 
